@@ -1,0 +1,23 @@
+<Project>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <!--
+      SKEXP0001 / SKEXP0010: Semantic Kernel experimental surface
+      (agents, Azure OpenAI embedding connectors). Pinned deliberately so the
+      rest of the solution still builds with warnings-as-errors.
+    -->
+    <NoWarn>$(NoWarn);SKEXP0001;SKEXP0010;SKEXP0110</NoWarn>
+  </PropertyGroup>
+
+</Project>

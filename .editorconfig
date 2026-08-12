@@ -1,0 +1,52 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+[*.{cs,csx}]
+indent_size = 4
+
+# --- Language conventions -------------------------------------------------
+
+[*.cs]
+csharp_style_namespace_declarations = file_scoped:error
+csharp_using_directive_placement = outside_namespace:error
+csharp_prefer_braces = true:error
+csharp_style_var_for_built_in_types = false:suggestion
+csharp_style_var_when_type_is_apparent = true:suggestion
+csharp_style_expression_bodied_methods = when_on_single_line:suggestion
+csharp_style_expression_bodied_properties = true:suggestion
+csharp_style_prefer_primary_constructors = true:suggestion
+
+dotnet_sort_system_directives_first = true
+dotnet_style_qualification_for_field = false:error
+dotnet_style_qualification_for_property = false:error
+dotnet_style_readonly_field = true:warning
+dotnet_style_prefer_conditional_expression_over_return = true:suggestion
+dotnet_style_coalesce_expression = true:suggestion
+dotnet_style_null_propagation = true:suggestion
+
+# Async methods that never await are almost always a mistake.
+dotnet_diagnostic.CS1998.severity = error
+
+# Unobserved cancellation tokens hide shutdown bugs.
+dotnet_diagnostic.CA2016.severity = warning
+
+[*.{json,yml,yaml}]
+indent_size = 2
+
+[*.md]
+trim_trailing_whitespace = false
+
+# EF Core scaffolds migrations with block namespaces and its own layout. Holding generated
+# files to the hand-written style rules would break the build every time a migration is added.
+[**/Persistence/Migrations/*.cs]
+generated_code = true
+dotnet_diagnostic.IDE0161.severity = none
+dotnet_diagnostic.IDE0300.severity = none
+dotnet_diagnostic.IDE0028.severity = none

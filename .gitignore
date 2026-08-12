@@ -1,0 +1,30 @@
+# Build output
+bin/
+obj/
+[Dd]ebug/
+[Rr]elease/
+artifacts/
+publish/
+TestResults/
+coverage/
+*.coverage
+*.trx
+
+# IDE
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Local configuration and secrets
+.env
+appsettings.Local.json
+appsettings.*.Local.json
+secrets.json
+
+# OS
+.DS_Store
+Thumbs.db
