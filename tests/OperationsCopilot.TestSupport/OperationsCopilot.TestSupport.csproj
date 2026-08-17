@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/OperationsCopilot.Agent/OperationsCopilot.Agent.csproj" />
+    <ProjectReference Include="../../src/OperationsCopilot.Domain/OperationsCopilot.Domain.csproj" />
+    <ProjectReference Include="../../src/OperationsCopilot.Infrastructure/OperationsCopilot.Infrastructure.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" />
+    <PackageReference Include="Testcontainers.PostgreSql" />
+    <PackageReference Include="xunit.v3.extensibility.core" />
+  </ItemGroup>
+
+</Project>
