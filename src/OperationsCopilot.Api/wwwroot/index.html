@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Operations Copilot — test console</title>
+  <meta name="description" content="Test console for the Operations Copilot chat API: answers, citations, tool calls and latency.">
+  <meta name="color-scheme" content="dark light">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>&#9881;</text></svg>">
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+
+  <header class="masthead">
+    <div class="masthead__brand">
+      <h1 class="masthead__title">Operations<span>Copilot</span></h1>
+      <span class="masthead__tag">test console</span>
+    </div>
+
+    <div class="masthead__spacer"></div>
+
+    <div class="masthead__meta">
+      <p class="status" id="status" data-state="unknown">
+        <span class="status__dot" aria-hidden="true"></span>
+        <span id="status-text">checking…</span>
+      </p>
+
+      <p class="conversation-id" id="conversation" hidden>
+        conversation <b id="conversation-value"></b>
+      </p>
+
+      <button type="button" class="button button--icon" id="theme-toggle" title="Switch theme">
+        <span aria-hidden="true" id="theme-icon">◑</span>
+        <span class="visually-hidden">Switch colour theme</span>
+      </button>
+
+      <button type="button" class="button" id="reset">New conversation</button>
+    </div>
+  </header>
+
+  <main class="workspace">
+    <section class="transcript" id="transcript" aria-live="polite" aria-label="Conversation">
+      <div class="transcript__inner" id="transcript-inner">
+
+        <article class="intro" id="intro">
+          <h2>Ask about stock, sales, products, or policy.</h2>
+          <p>
+            The agent chooses its own tools. Questions that need both live data and a written
+            rule will make it call the database <em>and</em> search the knowledge base, then apply
+            one to the other — those are marked below.
+          </p>
+
+          <strong class="intro__label">Try one</strong>
+          <div class="samples" id="samples"></div>
+        </article>
+
+      </div>
+    </section>
+
+    <aside class="inspector" id="inspector" aria-label="Trace of the last answer">
+      <section class="rail-section">
+        <h2 class="rail-heading">Last turn</h2>
+        <div id="metrics">
+          <p class="rail-empty">No request yet.</p>
+        </div>
+      </section>
+
+      <section class="rail-section">
+        <h2 class="rail-heading">Tools called</h2>
+        <div id="tools">
+          <p class="rail-empty">The agent decides which tools to call; they appear here.</p>
+        </div>
+      </section>
+
+      <section class="rail-section">
+        <h2 class="rail-heading">Citations</h2>
+        <div id="citations">
+          <p class="rail-empty">Passages retrieved from the knowledge base appear here.</p>
+        </div>
+      </section>
+    </aside>
+  </main>
+
+  <form class="composer" id="composer">
+    <div class="composer__inner">
+      <div class="composer__field">
+        <label class="visually-hidden" for="message">Your question</label>
+        <textarea
+          id="message"
+          name="message"
+          rows="1"
+          maxlength="2000"
+          placeholder="Which products need reordering, and how much should I order?"
+          autocomplete="off"
+          autofocus></textarea>
+        <p class="composer__hint">
+          <kbd>Enter</kbd> to send · <kbd>Shift</kbd>+<kbd>Enter</kbd> for a new line
+        </p>
+      </div>
+
+      <button type="submit" class="button button--primary" id="send">
+        Send
+        <span aria-hidden="true">→</span>
+      </button>
+    </div>
+  </form>
+
+  <script src="markdown.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <UserSecretsId>operations-copilot-api</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../OperationsCopilot.Agent/OperationsCopilot.Agent.csproj" />
+    <ProjectReference Include="../OperationsCopilot.Domain/OperationsCopilot.Domain.csproj" />
+    <ProjectReference Include="../OperationsCopilot.Infrastructure/OperationsCopilot.Infrastructure.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" />
+    <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks.EntityFrameworkCore" />
+    <PackageReference Include="Scalar.AspNetCore" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="OperationsCopilot.UnitTests" />
+    <InternalsVisibleTo Include="OperationsCopilot.EvaluationTests" />
+  </ItemGroup>
+
+</Project>
