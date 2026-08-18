@@ -1,0 +1,70 @@
+name: operations-copilot
+
+services:
+  postgres:
+    # pgvector's own image: stock Postgres plus the vector extension already built in.
+    image: pgvector/pgvector:pg17
+    container_name: operationscopilot-postgres
+    environment:
+      POSTGRES_DB: operationscopilot
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      # Published on 55433 rather than 5432 so the stack does not collide with a Postgres
+      # already running on the host. Override with POSTGRES_PORT if you prefer another.
+      - "${POSTGRES_PORT:-55433}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      # The API migrates on startup, so it must not start before Postgres accepts connections.
+      test: ["CMD-SHELL", "pg_isready -U postgres -d operationscopilot"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  api:
+    build:
+      context: .
+      dockerfile: src/OperationsCopilot.Api/Dockerfile
+    container_name: operationscopilot-api
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "5080:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_HTTP_PORTS: "8080"
+      ConnectionStrings__OperationsDb: "Host=postgres;Port=5432;Database=operationscopilot;Username=postgres;Password=postgres"
+
+      # Provider selection. Chat and embeddings are independent; see .env.example.
+      Ai__ChatProvider: "${AI_CHAT_PROVIDER:-Ollama}"
+      Ai__EmbeddingProvider: "${AI_EMBEDDING_PROVIDER:-Ollama}"
+
+      # Ollama runs on the host by default, not in this stack — models are large and are better
+      # managed with the `ollama` CLI. host.docker.internal reaches back out of the container.
+      Ollama__Endpoint: "${OLLAMA_ENDPOINT:-http://host.docker.internal:11434/v1}"
+      Ollama__ChatModel: "${OLLAMA_CHAT_MODEL:-qwen2.5:14b}"
+      Ollama__EmbeddingModel: "${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}"
+      Ollama__EmbeddingDimensions: "${OLLAMA_EMBEDDING_DIMENSIONS:-768}"
+
+      AzureOpenAI__Endpoint: "${AZURE_OPENAI_ENDPOINT:-}"
+      AzureOpenAI__ApiKey: "${AZURE_OPENAI_API_KEY:-}"
+      AzureOpenAI__ChatDeployment: "${AZURE_OPENAI_CHAT_DEPLOYMENT:-gpt-4o-mini}"
+      AzureOpenAI__EmbeddingDeployment: "${AZURE_OPENAI_EMBEDDING_DEPLOYMENT:-text-embedding-3-small}"
+      AzureOpenAI__EmbeddingDimensions: "${AZURE_OPENAI_EMBEDDING_DIMENSIONS:-1536}"
+
+    # Docker Desktop resolves host.docker.internal already; this adds it on Linux too.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+volumes:
+  postgres-data:
