@@ -1,7 +1,11 @@
 # OperationsCopilot
 
-An enterprise AI copilot for warehouse and sales operations, built as a readable reference for
-**RAG + a single agent + function calling** on .NET 10.
+> **This is a demonstration project, not a product.** It exists to show one clear way to build
+> **RAG + a single agent + function calling** on .NET 10, with code you can read end to end in an
+> afternoon. The data is invented, the company is fictional, and there is no authentication.
+> Read [Limits and caveats](#limits-and-caveats) before lifting anything into production.
+
+An AI copilot for warehouse and sales operations, built as a readable reference implementation.
 
 Ask it a question in plain English. A Semantic Kernel agent decides for itself which tools to
 call — live database queries, vector search over company policy documents, or both — and answers
@@ -30,15 +34,18 @@ POST /api/chat
 - [How a request flows](#how-a-request-flows)
 - [The four tools](#the-four-tools)
 - [The RAG pipeline](#the-rag-pipeline)
-- [Choosing a model provider](#choosing-a-model-provider)
+- [Model providers](#model-providers)
 - [The test console](#the-test-console)
 - [Getting started](#getting-started)
 - [Configuration](#configuration)
-- [Example queries and responses](#example-queries-and-responses)
-- [The evaluation suite](#the-evaluation-suite)
 - [Project layout](#project-layout)
 - [Design notes](#design-notes)
-- [What this is not](#what-this-is-not)
+- [Limits and caveats](#limits-and-caveats)
+
+**Deeper detail lives in `docs/`:**
+[model providers](docs/model-providers.md) ·
+[example queries and responses](docs/examples.md) ·
+[the evaluation suite](docs/evaluation.md)
 
 ---
 
@@ -265,7 +272,7 @@ environment; there is nothing in it specific to local development.
 
 ---
 
-## Choosing a model provider
+## Model providers
 
 Two settings, chosen independently:
 
@@ -276,93 +283,19 @@ Two settings, chosen independently:
 }
 ```
 
-| Provider | Chat | Embeddings | Notes |
-|---|:---:|:---:|---|
-| `Ollama` | yes | yes | Local, free, offline. Default. |
-| `AzureOpenAI` | yes | yes | Entra ID or API key. |
-| `Deterministic` | — | yes | Hashed bag-of-words, in process. Testing only. |
+Local Ollama by default; Azure OpenAI by configuration. Chat and embeddings switch separately, so
+one can be local and the other in the cloud. `Deterministic` is embeddings-only — retrieval has a
+usable offline stand-in, deciding which tools to call does not.
 
-Mixing is deliberate and useful: a local chat model with Azure embeddings keeps retrieval quality
-while cutting the per-token cost that dominates, and the reverse is handy when you have cloud
-chat but want indexing to stay on your machine.
+Two things will bite you, both covered in **[docs/model-providers.md](docs/model-providers.md)**:
 
-**`Deterministic` is not available for chat.** Retrieval has a usable local stand-in; deciding
-which tools to call does not. That constraint is enforced at startup rather than discovered on
-the first request.
+- **The chat model must support tool calling.** qwen2.5, llama3.1, llama3.2 and mistral-nemo do.
+- **Embedding dimensions must match the model** (nomic-embed-text is 768, text-embedding-3-small
+  is 1536). Switching rebuilds the pgvector column and re-indexes automatically.
 
-### Ollama
-
-The chat model **must support tool calling** — this agent does nothing without it. `qwen2.5`,
-`llama3.1`, `llama3.2` and `mistral-nemo` do; many small general-purpose models do not, and will
-fail by answering from thin air instead of calling a tool.
-
-```bash
-ollama pull qwen2.5:14b        # chat, supports tool calling
-ollama pull nomic-embed-text   # embeddings, 768 dimensions
-```
-
-Ollama is reached through its **OpenAI-compatible API** at `/v1`, not its native one, so it goes
-through the same Semantic Kernel connector as Azure OpenAI. Automatic function calling therefore
-takes an identical code path on both providers — one behaviour to reason about instead of two.
-
-### Embedding dimensions must match the model
-
-This is the one setting that will bite you. A pgvector column has a fixed width, and models
-disagree:
-
-| Model | Dimensions |
-|---|---|
-| `nomic-embed-text` | 768 |
-| `mxbai-embed-large`, `bge-m3` | 1024 |
-| `all-minilm` | 384 |
-| `text-embedding-3-small` | 1536 |
-| `text-embedding-3-large` | 3072 |
-
-Set `Ollama:EmbeddingDimensions` or `AzureOpenAI:EmbeddingDimensions` to match. If you get it
-wrong the app fails on the first embedding call with a message naming the real cause, rather than
-surfacing an opaque Postgres type error later.
-
-**Switching embedding providers rebuilds the vector column and re-indexes automatically.**
-`VectorSchema` compares the configured width against the live column on startup and, when they
-differ, drops the index, clears `document_chunks`, alters the column, and rebuilds — after which
-the indexer repopulates from the Markdown source. Clearing is not a shortcut: vectors from two
-different models are not comparable, so a mixed index returns nonsense. Re-indexing after a model
-change is mandatory however the schema is managed.
-
-Note that pgvector will not build an HNSW index above **2000 dimensions**. Above that the column
-still works but searches become sequential scans; the startup log says so explicitly.
-
-### Model capability and combined questions
-
-The evaluation suite turned up a finding worth stating plainly, because it decides which model
-you should run.
-
-Combining a database tool with the knowledge base in one turn — the thing this project exists to
-demonstrate — needs a model that will chain two tool calls before answering. Measured on this
-repository's own golden set, over all 14 labelled questions:
-
-| Model | Mean recall | Mean precision | Fully correct | Combined questions chained |
-|---|---|---|---|---|
-| `qwen2.5:7b` | 0.857 | 1.000 | 10 / 14 | **0 / 4** |
-| `qwen2.5:14b` | **1.000** | **1.000** | **14 / 14** | **4 / 4** |
-
-The 7b row is not bad work: it picks the right single tool essentially every time and never once
-called a tool it did not need. All four of its failures are the same failure. Asked *"which
-products need reordering, and how much should I order according to our policy?"* it calls
-`GetLowStockProducts`, stops, and writes the ordering rule from memory — an answer that reads as
-confident and cites nothing, which is the exact failure this design exists to prevent.
-
-That is not a prompting problem. The system prompt was made explicitly procedural about it — a
-numbered two-check rule with a worked example of this precise question — and 7b's behaviour did
-not change. 14b chains reliably with the same prompt.
-
-So the default is **qwen2.5:14b**, which answers every question in the golden set correctly.
-Drop to 7b only if single-tool questions are all you need; it is noticeably faster.
-
-The wider point is that this is invisible to every other kind of test. Unit tests, integration
-tests and the offline evaluations all pass on both models, because none of them involve the model
-choosing anything. Only the live tier catches it, which is why it is worth being able to run for
-free.
+There is also a measured note there on why the default is `qwen2.5:14b` and not `7b`: the smaller
+model never chains two tools in one turn, so every question needing both live data and a written
+rule gets answered from half the evidence.
 
 ---
 
@@ -549,262 +482,13 @@ because the scale of cosine scores differs between them.
 
 ---
 
-## Example queries and responses
+## Examples and evaluation
 
-> **On latency.** The `latencyMs` values below are from Azure OpenAI. A local model is far
-> slower: on an M-series Mac, qwen2.5:14b answers a two-tool question in roughly **two minutes**,
-> almost all of it model inference — the tool calls themselves were 518 ms and 390 ms in that
-> same run. Local costs nothing and keeps data on your machine; it does not match hosted latency.
-
-The seeded dataset is fixed (26 products, 52 stock rows, ~1,850 sales lines over 180 days), so
-these figures are reproducible. Sales dates are anchored to the current date, so date ranges shift
-with when you run it. Answer prose is illustrative — the model writes it — but the `citations`,
-`toolCalls` and figures below are real output shapes from real data.
-
-### 1. Database only
-
-```bash
-curl -s -X POST http://localhost:5080/api/chat -H 'Content-Type: application/json' \
-  -d '{"message":"Which products are running low on stock?"}'
-```
-
-```jsonc
-{
-  "answer": "Eight stock rows are at or below their reorder threshold, worst shortfall first:\n\n| SKU | Product | Warehouse | On hand | Threshold | Short by |\n|---|---|---|---|---|---|\n| HT-4002 | Ironvale Ratchet Screwdriver | WH-EU-01 | 13 | 54 | 41 |\n| EL-2005 | Nordsen Laser Distance Meter 60m | WH-AP-01 | 7 | 32 | 25 |\n| HT-4001 | Ironvale Combination Spanner Set 12pc | WH-NA-01 | 12 | 36 | 24 |\n| CN-5002 | Torqline Impact Bit Set 32pc | WH-EU-01 | 38 | 61 | 23 |\n| EL-2002 | Voltek Thermal Camera TC-120 | WH-EU-01 | 5 | 14 | 9 |\n| PT-1004 | Corvex Reciprocating Saw | WH-NA-01 | 11 | 19 | 8 |\n| CN-5001 | Corvex Cutting Disc 125mm (25 pack) | WH-EU-01 | 70 | 72 | 2 |\n| SE-3004 | Aeroshield Respirator Half Mask | WH-AP-01 | 27 | 28 | 1 |\n\nCN-5001 and SE-3004 have only just crossed their thresholds; the top four are well below.",
-  "conversationId": "0199a3f1c4d27b8e9f6a12b4c8e05d3a",
-  "citations": [],
-  "toolCalls": [
-    {
-      "pluginName": "Operations",
-      "functionName": "GetLowStockProducts",
-      "arguments": { "limit": "25" },
-      "durationMs": 34,
-      "succeeded": true,
-      "name": "Operations.GetLowStockProducts"
-    }
-  ],
-  "latencyMs": 1180,
-  "usage": { "promptTokens": 1642, "completionTokens": 268, "totalTokens": 1910 }
-}
-```
-
-`citations` is empty by design: those figures came from the database, not from a document. Citing
-them would misrepresent where they came from.
-
-### 2. Knowledge base only
-
-```bash
-curl -s -X POST http://localhost:5080/api/chat -H 'Content-Type: application/json' \
-  -d '{"message":"What is the restocking fee on opened goods that are returned?"}'
-```
-
-```jsonc
-{
-  "answer": "Opened goods in resalable condition can be returned within 30 days subject to a 15% restocking fee [1]. Business customers on a framework agreement get a 60-day window and are exempt from the fee on their first two returns each quarter [1].",
-  "conversationId": "0199a3f1d80e7c42b1359ae7f0c26d18",
-  "citations": [
-    {
-      "reference": "[1]",
-      "sourceFile": "returns-and-warranty-policy.md",
-      "documentTitle": "Aurora Supply Co. Returns and Warranty Policy",
-      "heading": "Standard Return Window",
-      "excerpt": "Customers may return unopened goods within 30 calendar days of delivery for a full refund. Opened goods in resalable condition may be returned within 30 days subject to a 15% restocking fee. After 30 days, returns are accepted only under warranty. Business customers on a framework agreement have a 60-day return window…",
-      "score": 0.5003
-    }
-  ],
-  "toolCalls": [
-    {
-      "pluginName": "KnowledgeBase",
-      "functionName": "SearchKnowledgeBase",
-      "arguments": { "query": "restocking fee opened goods returns" },
-      "durationMs": 12,
-      "succeeded": true,
-      "name": "KnowledgeBase.SearchKnowledgeBase"
-    }
-  ],
-  "latencyMs": 940
-}
-```
-
-### 3. Both, combined — the interesting case
-
-```bash
-curl -s -X POST http://localhost:5080/api/chat -H 'Content-Type: application/json' \
-  -d '{"message":"Which products need reordering, and how much should I order according to our policy?"}'
-```
-
-```jsonc
-{
-  "answer": "Eight stock rows are at or below their reorder point. Policy is to order back to the reorder threshold **plus one full lead-time cycle of demand** \u2014 ordering only up to the threshold is called out as the most common cause of repeat stockouts [1].\n\n| SKU | Product | Warehouse | On hand | Threshold | Short by | Supplier |\n|---|---|---|---|---|---|---|\n| HT-4002 | Ironvale Ratchet Screwdriver | WH-EU-01 | 13 | 54 | 41 | Ironvale Tooling |\n| EL-2005 | Nordsen Laser Distance Meter 60m | WH-AP-01 | 7 | 32 | 25 | Nordsen Electronics |\n| HT-4001 | Ironvale Combination Spanner Set 12pc | WH-NA-01 | 12 | 36 | 24 | Ironvale Tooling |\n| CN-5002 | Torqline Impact Bit Set 32pc | WH-EU-01 | 38 | 61 | 23 | Torqline Industrial |\n| EL-2002 | Voltek Thermal Camera TC-120 | WH-EU-01 | 5 | 14 | 9 | Voltek Instruments |\n| PT-1004 | Corvex Reciprocating Saw | WH-NA-01 | 11 | 19 | 8 | Corvex Power |\n| CN-5001 | Corvex Cutting Disc 125mm (25 pack) | WH-EU-01 | 70 | 72 | 2 | Corvex Power |\n| SE-3004 | Aeroshield Respirator Half Mask | WH-AP-01 | 27 | 28 | 1 | Aeroshield Protective |\n\nFour of these are **critical** rather than merely low, meaning at or below half the threshold [2]: HT-4002 (13 of 54), EL-2005 (7 of 32), HT-4001 (12 of 36) and EL-2002 (5 of 14). Those escalate to the Operations Director and the supplier account manager immediately, rather than the usual two business days.",
-  "conversationId": "0199a3f2118c7d4a86b0e5f39c714a02",
-  "citations": [
-    {
-      "reference": "[1]",
-      "sourceFile": "inventory-policy.md",
-      "documentTitle": "Aurora Supply Co. Inventory and Replenishment Policy",
-      "heading": "Replenishment Triggers",
-      "excerpt": "Purchase orders should bring stock back to the reorder threshold plus one full lead-time cycle of demand, not merely back to the threshold. Ordering only to the threshold is the single most common cause of repeat stockouts.",
-      "score": 0.4118
-    },
-    {
-      "reference": "[2]",
-      "sourceFile": "inventory-policy.md",
-      "documentTitle": "Aurora Supply Co. Inventory and Replenishment Policy",
-      "heading": "Reorder Thresholds",
-      "excerpt": "Every product carries a per-warehouse reorder threshold. Stock is considered low when quantity on hand is at or below that threshold, and critical when it is at or below half the threshold.",
-      "score": 0.3874
-    }
-  ],
-  "toolCalls": [
-    { "pluginName": "Operations", "functionName": "GetLowStockProducts", "arguments": { "limit": "25" }, "durationMs": 31, "succeeded": true, "name": "Operations.GetLowStockProducts" },
-    { "pluginName": "KnowledgeBase", "functionName": "SearchKnowledgeBase", "arguments": { "query": "how much to order when stock falls below reorder threshold" }, "durationMs": 14, "succeeded": true, "name": "KnowledgeBase.SearchKnowledgeBase" }
-  ],
-  "latencyMs": 2470
-}
-```
-
-The agent called two tools of its own accord, applied the written rule to the specific rows it
-found, and worked out which of them cross the "critical" line the policy defines — a threshold
-that exists only in the Markdown, and is nowhere in the database or the code. Nothing told it to
-do any of that.
-
-### 4. Sales analysis
-
-```bash
-curl -s -X POST http://localhost:5080/api/chat -H 'Content-Type: application/json' \
-  -d '{"message":"How did each category sell over the last 30 days?"}'
-```
-
-The tool returns real aggregates like these:
-
-| Category | Revenue | Units | Order lines |
-|---|---|---|---|
-| Power Tools | 249,377.14 | 1,108 | 45 |
-| Electronics | 205,719.10 | 1,309 | 56 |
-| Safety Equipment | 136,480.47 | 2,063 | 74 |
-| Hand Tools | 102,414.01 | 2,203 | 56 |
-| Consumables | 49,007.96 | 1,572 | 88 |
-
-### 5. Follow-up in the same conversation
-
-```bash
-curl -s -X POST http://localhost:5080/api/chat -H 'Content-Type: application/json' \
-  -d '{"message":"And how should we price the discontinued one?","conversationId":"0199a3f2118c7d4a86b0e5f39c714a02"}'
-```
-
-Pass back the `conversationId` and the agent gets the earlier turns, so "the discontinued one"
-resolves. History is capped at 12 turns with a one-hour sliding expiry.
-
-### More questions to try
-
-```text
-Tell me about PT-1001.
-What needs reordering in the Rotterdam warehouse?
-Who has to approve a 20% discount?
-How long is the warranty on safety equipment?
-What is the standard lead time for a Tier 2 supplier?
-Is the stock figure for EL-2002 still trustworthy under our cycle counting policy?
-Are any low-stock items at the critical level our inventory policy defines?
-PT-1006 is discontinued — how should I price the remaining stock?
-```
-
----
-
-## The evaluation suite
-
-Retrieval quality and tool selection are measurable. Treating them as a matter of judgement is how
-a RAG system quietly degrades: someone edits the system prompt, retrieval gets worse, and nobody
-notices until a user is confidently told the wrong warranty period.
-
-The suite runs in two tiers.
-
-### Offline tier — always runs, free, deterministic
-
-Uses the deterministic embedding provider and a scripted chat model, so it is identical on every
-machine and costs nothing. This is what runs on every commit.
-
-| Suite | What it measures |
-|---|---|
-| `RagRetrievalEvaluationTests` | Recall@5, MRR and top-1 accuracy over 15 labelled queries |
-| `ScoreDistributionTests` | The similarity floor, against measured on-topic vs off-topic scores |
-| `ToolCatalogueEvaluationTests` | That every tool and parameter is described well enough to be chosen correctly |
-| `AgentPipelineTests` | The full turn: tool → recorder → citations → response, with a scripted model |
-| `OperationsRepositoryTests` | The three database tools against real PostgreSQL |
-
-Current measured retrieval performance:
-
-```
-MRR                 0.922
-Recall@5            0.967
-Top-1 accuracy      0.867
-Cases               15
-```
-
-Thresholds are set **below** observed performance with headroom (MRR ≥ 0.80, recall ≥ 0.80,
-top-1 ≥ 0.70), so ordinary variation does not fail the build while a genuine regression does.
-
-`RagRetrievalEvaluationTests` prints a per-query table, so a failure tells you *which* question
-broke:
-
-```
-PASS  rr=1.00  recall@5=1.00  top=inventory-policy.md          How is the reorder threshold calculated?
-PASS  rr=1.00  recall@5=1.00  top=supplier-management.md       What is the standard lead time for a Tier 2 supplier?
-PASS  rr=0.50  recall@5=1.00  top=product-catalog-guide.md     What should we do when a product goes out of stock?
-```
-
-> **Read the offline retrieval numbers for what they are.** They measure *lexical* retrieval,
-> because the deterministic provider matches on shared vocabulary. They prove chunking, indexing,
-> ranking and filtering work; a real embedding model should comfortably beat them. A failure here
-> means the pipeline broke, not that the model got worse.
-
-### Live tier — needs a real model
-
-Runs against whichever provider the machine has: Azure OpenAI when `AZURE_OPENAI_ENDPOINT` is
-set, otherwise a local Ollama server with the configured chat model pulled. It skips only when
-neither is available.
-
-That matters more than it sounds. Tying this tier to cloud credentials meant almost nobody ran
-it; with Ollama it costs nothing, so it can run before every prompt or tool-description change —
-which is exactly when tool selection silently degrades.
-
-`LiveToolSelectionEvaluationTests` runs 14 labelled questions against the real model and scores
-which tools it chose:
-
-- **Mean recall ≥ 0.80** — did it call the tools it needed? A miss means an invented answer.
-- **Mean precision ≥ 0.65** — did it avoid calling ones it did not need? An extra call only costs
-  latency, so this bar is deliberately lower.
-- **≥ 50% of combined questions used both a database tool and the knowledge base** — answering
-  half a combined question is the failure mode that matters most, because the reply reads as
-  authoritative while the rule, or the data, was invented.
-
-Thresholds allow slack: model output is not deterministic, and a suite that fails one run in five
-teaches people to ignore it. The per-question output matters more than the pass/fail — it shows
-*where* a model is weak, not just that it is.
-
-The two bars separate cleanly in practice. qwen2.5:7b clears recall and precision comfortably
-(0.857 and 1.000) while failing the combined-questions bar outright at 0/4, because it never
-chains two tools. That is the split described in
-[model capability](#model-capability-and-combined-questions), and it is exactly the kind of thing
-a single pass/fail number would have hidden.
-
-Be aware of the run time locally: the full live tier takes about **13 minutes** against
-qwen2.5:14b on an M-series Mac, since it puts 20-odd questions through a local model. It is a
-coffee-break run, not something for a pre-commit hook. CI excludes it explicitly with
-`--filter "Category!=LiveModel"`.
-
-Two further live checks assert the answer itself, not just the tool choice: a policy question must
-produce a citation from the right document, and a stock question must name the products the tool
-actually returned — compared against the database rather than a hardcoded list.
-
-### Extending the golden sets
-
-Both live in one file each, deliberately:
-
-- Retrieval: [`RetrievalGoldenSet.cs`](tests/OperationsCopilot.EvaluationTests/Rag/RetrievalGoldenSet.cs)
-- Tool selection: [`ToolSelectionGoldenSet.cs`](tests/OperationsCopilot.EvaluationTests/Tools/ToolSelectionGoldenSet.cs)
-
-When a real question answers badly, add it. A regression that is not in the golden set is a
-regression nobody notices.
+- **[docs/examples.md](docs/examples.md)** — worked requests and full JSON responses: database
+  only, knowledge base only, both combined, and a follow-up turn.
+- **[docs/evaluation.md](docs/evaluation.md)** — the two-tier evaluation suite. The offline tier
+  runs free and deterministic on every commit (measured MRR 0.922, recall@5 0.967 over a 15-query
+  golden set); the live tier measures how a real model actually selects tools.
 
 ---
 
@@ -895,14 +579,14 @@ what it has. The user still gets a reply instead of a hung request or an error.
    base contains no relevant passage". It is now `0.15`, chosen from the measured gap between
    on-topic and off-topic scores.
 3. Small local models do not chain tools. See
-   [model capability](#model-capability-and-combined-questions) — the live tier surfaced this
+   [model capability](docs/model-providers.md#model-capability-and-combined-questions) — the live tier surfaced this
    immediately, and it is invisible to every other kind of test.
 
 ---
 
-## What this is not
+## Limits and caveats
 
-Honest limitations, so nobody is surprised in production:
+This is a demonstration project. Where it would differ from something you could deploy:
 
 - **Migrations run at startup.** Convenient for `docker compose up`; wrong for a real deployment,
   where schema changes should be gated in a release pipeline. Set
