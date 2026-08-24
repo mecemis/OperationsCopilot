@@ -70,64 +70,81 @@ PostgreSQL 17 + pgvector · EF Core 10 · Docker Compose · xUnit v3 · GitHub A
 
 ## Architecture
 
-Four layers, each depending only on the one below it. No microservices, no message bus, no CQRS —
-the interesting part of this problem is the agent, and everything else stays out of its way.
+Four projects, each depending only on the one beneath it. No microservices, no message bus, no
+CQRS — the interesting part of this problem is the agent, and everything else stays out of its way.
 
 ```mermaid
 flowchart TB
-    client([HTTP client])
+    api["<b>OperationsCopilot.Api</b> · host<br/><br/>POST /api/chat · test console · OpenAPI · health"]
+    agent["<b>OperationsCopilot.Agent</b> · orchestration<br/><br/>ChatCompletionAgent · the four tools<br/>tool-call filter · system prompt"]
+    infra["<b>OperationsCopilot.Infrastructure</b> · adapters<br/><br/>EF Core · pgvector search · chunk + index<br/>model clients · provider selection"]
+    domain["<b>OperationsCopilot.Domain</b> · core<br/><br/>entities · query and chat contracts · interfaces<br/><i>no dependencies on anything above</i>"]
 
-    subgraph api["OperationsCopilot.Api — host"]
-        endpoint["POST /api/chat<br/>validation · problem details · OpenAPI"]
-    end
+    api ==> agent ==> infra ==> domain
 
-    subgraph agent["OperationsCopilot.Agent — orchestration"]
-        sk["ChatCompletionAgent<br/>FunctionChoiceBehavior.Auto"]
-        tools["4 kernel functions"]
-        filter["ToolCallTrackingFilter<br/>timing · budget · telemetry"]
-    end
-
-    subgraph infra["OperationsCopilot.Infrastructure — adapters"]
-        repo["OperationsRepository<br/>EF Core"]
-        search["PgVectorKnowledgeBaseSearch<br/>cosine &lt;=&gt; + HNSW"]
-        embed["IEmbeddingService<br/>Ollama · Azure · deterministic"]
-        indexer["KnowledgeBaseIndexer<br/>chunk · embed · upsert"]
-    end
-
-    subgraph domain["OperationsCopilot.Domain — core"]
-        entities["Entities · queries · chat contracts · interfaces"]
-    end
-
-    db[("PostgreSQL 17 + pgvector<br/>products · inventory · sales · document_chunks")]
-    aoai{{"Ollama (local)<br/>or Azure OpenAI<br/>chat + embeddings"}}
-    docs[/"docs/knowledge-base/*.md"/]
-
-    client --> endpoint --> sk
-    sk <--> tools
-    tools -.observed by.-> filter
-    sk <--> aoai
-    tools --> repo
-    tools --> search
-    search --> embed --> aoai
-    docs --> indexer --> embed
-    indexer --> db
-    repo --> db
-    search --> db
-
-    agent -.depends on.-> infra -.depends on.-> domain
-
-    classDef store fill:#e8f0fe,stroke:#4285f4,color:#111
-    classDef ext fill:#fff4e5,stroke:#f9a825,color:#111
-    class db store
-    class aoai ext
+    classDef layer fill:#f7f7f5,stroke:#9a9a90,stroke-width:1px,color:#22221e,rx:6,ry:6
+    classDef core fill:#eef1f6,stroke:#5b7aa8,stroke-width:1px,color:#16202e,rx:6,ry:6
+    class api,agent,infra layer
+    class domain core
 ```
 
-**Why the agent sits above infrastructure.** The agent orchestrates adapters, so it is the higher
-layer. Its plugins depend only on the domain interfaces (`IOperationsRepository`,
-`IKnowledgeBaseSearch`), which is what keeps them testable without a database. The reference to
-the infrastructure project exists so the agent can ask `AiClientFactory` for a model client —
-endpoints, credentials and provider choice stay on the infrastructure side, and the agent only
-knows how to wire a client into Semantic Kernel.
+Arrows are *references*, not calls. The direction never reverses, which is what keeps the domain
+free of EF Core, Semantic Kernel and HTTP.
+
+**Why the agent sits above infrastructure.** It orchestrates adapters, so it is the higher layer.
+Its plugins depend only on the domain interfaces (`IOperationsRepository`, `IKnowledgeBaseSearch`),
+which is what keeps them testable without a database. The one reference into infrastructure exists
+so the agent can ask `AiClientFactory` for a model client — endpoints, credentials and provider
+choice stay on the infrastructure side, and the agent only knows how to wire a client into
+Semantic Kernel.
+
+### What talks to what
+
+The same system at run time. Here the arrows *are* calls, and the boundary worth noticing is
+which boxes sit outside the process.
+
+```mermaid
+flowchart LR
+    client([" client<br/>console or curl "])
+    endpoint["POST /api/chat"]
+    brain["Semantic Kernel agent"]
+    chat{{"chat model<br/>Ollama · Azure OpenAI"}}
+
+    subgraph tools["the four tools — the model picks"]
+        direction TB
+        low["GetLowStockProducts"]
+        sales["GetSalesSummary"]
+        prod["GetProductDetails"]
+        kb["SearchKnowledgeBase"]
+    end
+
+    embed{{"embedding model<br/>Ollama · Azure · deterministic"}}
+    db[("PostgreSQL 17 + pgvector<br/>products · inventory · sales<br/>document_chunks")]
+
+    client --> endpoint --> brain
+    brain <--> chat
+    brain --> tools
+    low --> db
+    sales --> db
+    prod --> db
+    kb --> embed
+    kb --> db
+
+    classDef ext fill:#fdf1dd,stroke:#c8860d,stroke-width:1px,color:#3d2a05
+    classDef store fill:#e7eef8,stroke:#3f6fa8,stroke-width:1px,color:#122135
+    classDef node fill:#f7f7f5,stroke:#9a9a90,color:#22221e
+    class chat,embed ext
+    class db store
+    class client,endpoint,brain,low,sales,prod,kb node
+    style tools fill:#fcfcfb,stroke:#c9c9c1,color:#5c5c55
+```
+
+Only two kinds of box leave the process: the models and the database. Chat and embeddings are
+drawn separately because they are two separate settings — one can run locally while the other
+runs in Azure. See [model providers](#model-providers).
+
+Indexing is not shown here; it runs once at startup and is covered in
+[the RAG pipeline](#the-rag-pipeline).
 
 ---
 
