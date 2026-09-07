@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using OperationsCopilot.Domain.Catalog;
 using OperationsCopilot.Domain.Knowledge;
+using OperationsCopilot.Domain.Planning;
 
 namespace OperationsCopilot.Infrastructure.Persistence;
 
@@ -19,6 +20,8 @@ public sealed class OperationsDbContext(DbContextOptions<OperationsDbContext> op
     public DbSet<Sale> Sales => Set<Sale>();
 
     public DbSet<DocumentChunk> DocumentChunks => Set<DocumentChunk>();
+
+    public DbSet<CachedToolPlan> CachedToolPlans => Set<CachedToolPlan>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

@@ -5,6 +5,7 @@ using Microsoft.SemanticKernel;
 using OperationsCopilot.Agent.Options;
 using OperationsCopilot.Domain.Abstractions;
 using OperationsCopilot.Domain.Chat;
+using OperationsCopilot.Domain.Planning;
 
 namespace OperationsCopilot.Agent.Filters;
 
@@ -82,28 +83,53 @@ public sealed class ToolCallTrackingFilter(
         }
     }
 
+    /// <summary>
+    /// Records the call twice, in two shapes: whole for replay, shortened for display.
+    /// </summary>
+    /// <remarks>
+    /// The two must not be collapsed into one. Truncating an argument is right in a response the
+    /// user reads and wrong in a plan the agent may execute again — a shortened
+    /// <c>skuOrName</c> would silently look up a different product.
+    /// </remarks>
     private void Record(FunctionInvocationContext context, long elapsedMs, bool succeeded, string? error)
-        => recorder.RecordToolCall(new ToolInvocation(
-            context.Function.PluginName ?? "Unknown",
+    {
+        var plugin = context.Function.PluginName ?? "Unknown";
+        var arguments = ReadArguments(context.Arguments);
+
+        recorder.RecordPlannedCall(new PlannedToolCall(plugin, context.Function.Name, arguments));
+
+        recorder.RecordToolCall(new ToolInvocation(
+            plugin,
             context.Function.Name,
-            DescribeArguments(context.Arguments),
+            Shorten(arguments),
             elapsedMs,
             succeeded,
             error));
+    }
 
-    private static Dictionary<string, string?> DescribeArguments(KernelArguments arguments)
+    private static Dictionary<string, string?> ReadArguments(KernelArguments arguments)
     {
-        var described = new Dictionary<string, string?>(StringComparer.Ordinal);
+        var read = new Dictionary<string, string?>(StringComparer.Ordinal);
 
         foreach (var (key, value) in arguments)
         {
-            var text = value?.ToString();
-
-            described[key] = text is { Length: > MaxArgumentLength }
-                ? text[..MaxArgumentLength] + "…"
-                : text;
+            read[key] = value?.ToString();
         }
 
-        return described;
+        return read;
+    }
+
+    private static Dictionary<string, string?> Shorten(IReadOnlyDictionary<string, string?> arguments)
+    {
+        var shortened = new Dictionary<string, string?>(StringComparer.Ordinal);
+
+        foreach (var (key, value) in arguments)
+        {
+            shortened[key] = value is { Length: > MaxArgumentLength }
+                ? value[..MaxArgumentLength] + "…"
+                : value;
+        }
+
+        return shortened;
     }
 }

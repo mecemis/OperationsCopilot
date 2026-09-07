@@ -15,6 +15,39 @@ public sealed record ChatResponse(
 {
     /// <summary>Token usage, when the model reported it.</summary>
     public TokenUsage? Usage { get; init; }
+
+    /// <summary>What the semantic plan cache did this turn. Null when the cache is switched off.</summary>
+    public PlanCacheTrace? PlanCache { get; init; }
+}
+
+/// <summary>
+/// The semantic plan cache's contribution to one turn.
+/// </summary>
+/// <remarks>
+/// Reported for the same reason the tool calls are: an answer produced from a reused plan was
+/// reached differently from one the model planned itself, and hiding that would make the trace
+/// less honest than the thing it describes. A reused plan still ran its tools against live data,
+/// so the figures are current either way — what changed is who chose the tools.
+/// </remarks>
+/// <param name="Hit">True when a stored plan was found and replayed.</param>
+public sealed record PlanCacheTrace(bool Hit)
+{
+    /// <summary>Similarity between this question and the one that produced the stored plan.</summary>
+    public double? Similarity { get; init; }
+
+    /// <summary>The question the reused plan was originally generated for.</summary>
+    public string? MatchedQuestion { get; init; }
+
+    public DateTimeOffset? PlanCapturedAt { get; init; }
+
+    /// <summary>Turns that had already replayed this plan before this one.</summary>
+    public int? TimesReused { get; init; }
+
+    /// <summary>True when this turn's own plan was written to the cache for later reuse.</summary>
+    public bool Stored { get; init; }
+
+    /// <summary>Why the cache was not consulted, or not written to, when it wasn't.</summary>
+    public string? Note { get; init; }
 }
 
 /// <summary>A knowledge-base passage the agent retrieved while answering.</summary>

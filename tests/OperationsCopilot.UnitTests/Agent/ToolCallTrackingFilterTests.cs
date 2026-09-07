@@ -63,6 +63,36 @@ public class ToolCallTrackingFilterTests
     }
 
     [Fact]
+    public async Task OnFunctionInvocationAsync_KeepsTheWholeArgumentInTheReplayablePlan()
+    {
+        // The same call is recorded twice, and the two records must not agree. Truncation is
+        // right for a value the user reads and catastrophic for one the agent may execute again:
+        // a shortened query would silently search for something else on every replay.
+        var kernel = BuildKernel(budget: 8, () => "ok");
+        var query = new string('x', 500);
+
+        await kernel.InvokeAsync(
+            kernel.Plugins.GetFunction("Test", "Probe"),
+            new KernelArguments { ["query"] = query },
+            TestContext.Current.CancellationToken);
+
+        _recorder.PlannedCalls.ShouldHaveSingleItem().Arguments["query"].ShouldBe(query);
+    }
+
+    [Fact]
+    public async Task OnFunctionInvocationAsync_RecordsThePlanInInvocationOrder()
+    {
+        var kernel = BuildKernel(budget: 8, () => "ok");
+        var probe = kernel.Plugins.GetFunction("Test", "Probe");
+
+        await kernel.InvokeAsync(probe, new KernelArguments { ["step"] = "first" }, TestContext.Current.CancellationToken);
+        await kernel.InvokeAsync(probe, new KernelArguments { ["step"] = "second" }, TestContext.Current.CancellationToken);
+
+        _recorder.PlannedCalls.Select(call => call.Arguments["step"]).ShouldBe(["first", "second"]);
+        _recorder.PlannedCalls.ShouldAllBe(call => call.Name == "Test.Probe");
+    }
+
+    [Fact]
     public async Task OnFunctionInvocationAsync_StopsCallingToolsOnceTheBudgetIsSpent()
     {
         var invocations = 0;

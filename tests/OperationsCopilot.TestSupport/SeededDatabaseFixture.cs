@@ -82,6 +82,10 @@ public sealed class SeededDatabaseFixture : IAsyncLifetime
                     nameof(AiProvider.Ollama),
                 // Indexing is driven explicitly in InitializeAsync so its result can be asserted.
                 [$"{RagOptions.SectionName}:{nameof(RagOptions.IndexOnStartup)}"] = "false",
+                // Plan reuse is opt-in per test. The cache is shared database state, so leaving
+                // it on would let one test's stored plan silently answer another test's question
+                // and make the suite depend on the order it happens to run in.
+                [$"{SemanticCacheOptions.SectionName}:{nameof(SemanticCacheOptions.Enabled)}"] = "false",
             })
             .Build();
 

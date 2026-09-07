@@ -1,3 +1,5 @@
+using OperationsCopilot.Agent.Planning;
+
 namespace OperationsCopilot.Agent;
 
 /// <summary>
@@ -83,5 +85,32 @@ public static class CopilotSystemPrompt
         return string.IsNullOrWhiteSpace(additionalInstructions)
             ? prompt
             : $"{prompt}\n\n## Additional instructions\n\n{additionalInstructions.Trim()}";
+    }
+
+    /// <summary>
+    /// Presents the output of a replayed plan to the model, which is being asked to write the
+    /// answer but not to choose the tools.
+    /// </summary>
+    /// <remarks>
+    /// The evidence goes in as a system message rather than as tool messages, because a tool
+    /// message with no preceding tool call is rejected by both the OpenAI and the
+    /// OpenAI-compatible APIs — there is no assistant turn to attach it to when the calls were
+    /// decided on a previous turn, days ago. A system message says the same thing and behaves
+    /// identically on both providers.
+    /// </remarks>
+    public static string BuildReplayedEvidence(IReadOnlyList<ReplayedCall> calls)
+    {
+        var sections = calls.Select(call => $"### {call.ToolName}\n\n{call.Output}");
+
+        return $"""
+                ## Tool output for this turn
+
+                These tools have already been run for the question that follows, and this is what
+                they returned just now. Answer from this output. Everything in the instructions
+                above still applies — the citation markers, the style, and the rule against
+                inventing anything a tool did not report. Do not ask for further tool calls.
+
+                {string.Join("\n\n", sections)}
+                """;
     }
 }

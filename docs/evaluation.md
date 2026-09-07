@@ -20,6 +20,8 @@ machine and costs nothing. This is what runs on every commit.
 | `ScoreDistributionTests` | The similarity floor, against measured on-topic vs off-topic scores |
 | `ToolCatalogueEvaluationTests` | That every tool and parameter is described well enough to be chosen correctly |
 | `AgentPipelineTests` | The full turn: tool → recorder → citations → response, with a scripted model |
+| `SemanticPlanCacheTests` | Plan storage, the distance query, expiry, the day anchor, eviction |
+| `PlanReuseTests` | That a replayed turn runs its tools with the model given no tool catalogue |
 | `OperationsRepositoryTests` | The three database tools against real PostgreSQL |
 
 Current measured retrieval performance:
@@ -87,12 +89,39 @@ Two further live checks assert the answer itself, not just the tool choice: a po
 produce a citation from the right document, and a stock question must name the products the tool
 actually returned — compared against the database rather than a hardcoded list.
 
+### Plan cache separation
+
+`PlanCacheSeparationTests` is the live check that decides whether plan reuse is safe at all, and
+it is the reason the offline tier cannot cover this feature: the deterministic provider matches
+vocabulary rather than meaning, so it says nothing about how a real model scores a paraphrase.
+
+It measures three relationships between question pairs and prints every score:
+
+| Relationship | Should the plan be reused? | Measured against nomic-embed-text |
+|---|---|---|
+| Paraphrase | yes | 0.54 – 0.94 |
+| Near miss — same shape, different rule | no | 0.42 – 0.78 |
+| Confusable — same shape, different subject | no | 0.77 – 0.91 |
+
+The bands overlap, which is the finding the design is built around. The assertions are therefore
+weaker than "every paraphrase hits", which is measurably false:
+
+- **No near miss clears the floor.** One that did would replay a plan for a different rule.
+- **At least one paraphrase clears it**, or the cache can never hit at all.
+- **Paraphrases average higher than near misses**, or the floor is measuring noise.
+- **Every confusable pair is rejected by `QuestionDiscriminators`** — and at least one of them
+  still clears the floor, so the guard cannot be deleted later as redundant without failing here.
+
+Re-run this after changing the embedding model. The numbers describe one model, not embeddings in
+general, and `SemanticCache:MinimumSimilarity` should be re-chosen from its output.
+
 ## Extending the golden sets
 
 Both live in one file each, deliberately:
 
 - Retrieval: [`RetrievalGoldenSet.cs`](../tests/OperationsCopilot.EvaluationTests/Rag/RetrievalGoldenSet.cs)
 - Tool selection: [`ToolSelectionGoldenSet.cs`](../tests/OperationsCopilot.EvaluationTests/Tools/ToolSelectionGoldenSet.cs)
+- Plan reuse: [`PlanReuseGoldenSet.cs`](../tests/OperationsCopilot.EvaluationTests/Planning/PlanReuseGoldenSet.cs)
 
 When a real question answers badly, add it. A regression that is not in the golden set is a
 regression nobody notices.

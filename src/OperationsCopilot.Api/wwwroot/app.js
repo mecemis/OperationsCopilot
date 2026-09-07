@@ -241,6 +241,49 @@
     });
 
     dom.metrics.append(grid);
+    renderPlanCache(response.planCache);
+  }
+
+  /**
+   * The plan cache's contribution to the turn.
+   *
+   * Worth showing next to the timings rather than hiding: a reused plan is a turn the model did
+   * not shape, and the latency above only makes sense once you know which of the two happened.
+   */
+  function renderPlanCache(planCache) {
+    if (!planCache) {
+      return;
+    }
+
+    const panel = el('div', `plan${planCache.hit ? ' plan--hit' : ''}`);
+    const head = el('div', 'plan__head');
+
+    head.append(
+      el('span', 'plan__badge', planCache.hit ? 'plan reused' : 'plan generated'),
+      el(
+        'span',
+        'plan__detail',
+        planCache.hit
+          ? `${planCache.similarity.toFixed(2)} similarity`
+          : planCache.stored
+            ? 'cached for reuse'
+            : 'not cached',
+      ),
+    );
+
+    panel.append(head);
+
+    if (planCache.hit && planCache.matchedQuestion) {
+      const reuse = planCache.timesReused
+        ? ` · replayed ${planCache.timesReused}× before`
+        : '';
+
+      panel.append(el('p', 'plan__note', `Tools chosen for "${planCache.matchedQuestion}"${reuse}.`));
+    } else if (planCache.note) {
+      panel.append(el('p', 'plan__note', planCache.note));
+    }
+
+    dom.metrics.append(panel);
   }
 
   function renderTools(toolCalls) {

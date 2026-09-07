@@ -34,6 +34,7 @@ POST /api/chat
 - [How a request flows](#how-a-request-flows)
 - [The four tools](#the-four-tools)
 - [The RAG pipeline](#the-rag-pipeline)
+- [The semantic plan cache](#the-semantic-plan-cache)
 - [Model providers](#model-providers)
 - [The test console](#the-test-console)
 - [Getting started](#getting-started)
@@ -118,10 +119,14 @@ flowchart LR
         kb["SearchKnowledgeBase"]
     end
 
+    plan["plan cache<br/>reuse an earlier tool choice"]
     embed{{"embedding model<br/>Ollama · Azure · deterministic"}}
-    db[("PostgreSQL 17 + pgvector<br/>products · inventory · sales<br/>document_chunks")]
+    db[("PostgreSQL 17 + pgvector<br/>products · inventory · sales<br/>document_chunks · semantic_plan_cache")]
 
     client --> endpoint --> brain
+    brain --> plan
+    plan --> embed
+    plan --> db
     brain <--> chat
     brain --> tools
     low --> db
@@ -135,13 +140,17 @@ flowchart LR
     classDef node fill:#f7f7f5,stroke:#9a9a90,color:#22221e
     class chat,embed ext
     class db store
-    class client,endpoint,brain,low,sales,prod,kb node
+    class client,endpoint,brain,plan,low,sales,prod,kb node
     style tools fill:#fcfcfb,stroke:#c9c9c1,color:#5c5c55
 ```
 
 Only two kinds of box leave the process: the models and the database. Chat and embeddings are
 drawn separately because they are two separate settings — one can run locally while the other
 runs in Azure. See [model providers](#model-providers).
+
+The plan cache sits in front of the chat model rather than in front of the tools, which is the
+whole of its design: on a hit the tools still run, and only the model's turn is skipped. See
+[the semantic plan cache](#the-semantic-plan-cache).
 
 Indexing is not shown here; it runs once at startup and is covered in
 [the RAG pipeline](#the-rag-pipeline).
@@ -191,6 +200,10 @@ Two details worth noting:
 - **Telemetry comes from a filter, not from the tools.** `ToolCallTrackingFilter` observes every
   invocation, so the `toolCalls` array cannot drift out of step with what actually ran — a tool
   added later is reported automatically.
+- **The first step above can be skipped.** When the question closely matches one asked before, the
+  tool choice is replayed from the plan cache and the model is only asked to write the answer.
+  Steps 4 and the tool-call rounds collapse into one call; everything below them happens exactly
+  as drawn.
 
 ---
 
@@ -286,6 +299,128 @@ emphasis, citation markers — reintroduced.
 
 Set `Database:InitializeOnStartup` and point the console at a running API and it works against any
 environment; there is nothing in it specific to local development.
+
+---
+
+## The semantic plan cache
+
+The expensive part of a turn is not the database. It is the model round trip that decides *which*
+tools to call and with what arguments — the tool catalogue goes into the prompt, the model thinks,
+and only then does any work begin. Ask "which products are running low?" twice and that decision
+is made twice, identically.
+
+So the cache stores the decision, not the answer:
+
+```mermaid
+flowchart LR
+    q["question"] --> look{"a plan for a<br/>question like this?"}
+
+    look -- "no" --> model["model picks the tools"] --> run1["run them"] --> write1["model writes the answer"]
+    write1 --> store[("store the plan")]
+
+    look -- "yes" --> run2["run the stored tools"] --> write2["model writes the answer"]
+
+    classDef hit fill:#e6f4ea,stroke:#3d7a52,color:#12331f
+    classDef miss fill:#f7f7f5,stroke:#9a9a90,color:#22221e
+    classDef store fill:#e7eef8,stroke:#3f6fa8,color:#122135
+    class run2,write2 hit
+    class model,run1,write1 miss
+    class store,look store
+```
+
+**A cached plan cannot serve a stale figure.** The tools run again, against the live database,
+every time. What is reused is the choice — `GetLowStockProducts(warehouseCode: "WH-EU-01")` —
+not what it returned. That is the difference between this and a response cache, and it is why
+there is no invalidation problem to solve when stock moves or a document is re-indexed.
+
+On a hit the model is called once instead of twice or more, and it is called with **no tool
+catalogue at all** — the kernel is cloned without its plugins for that call. Skipping the round
+trip while still paying for the tool definitions in the prompt would give up most of the saving.
+
+### Why similarity is not enough
+
+Lookup is by meaning, because the same request arrives worded a dozen ways. The obvious design —
+embed the question, take the nearest stored one above a threshold — is unsafe, and measurably so.
+Cosine similarity against `nomic-embed-text`, over the golden set in
+[`PlanReuseGoldenSet`](tests/OperationsCopilot.EvaluationTests/Planning/PlanReuseGoldenSet.cs):
+
+| Relationship | Should the plan be reused? | Measured range |
+|---|---|---|
+| Paraphrase — "what items need reordering?" | **yes** | 0.54 – 0.94 |
+| Near miss — returns policy vs pricing policy | no | 0.42 – 0.78 |
+| **Confusable — PT-1001 vs PT-1006** | **no** | **0.77 – 0.91** |
+
+The third row is the problem. `Tell me about PT-1001` and `Tell me about PT-1006` score **0.87**;
+revenue over 30 days against 90 days scores **0.91**. Both sit *inside* the paraphrase band, so no
+threshold separates them. A cache built on similarity alone would answer about the wrong product,
+in fluent prose, citing figures a tool genuinely returned — the worst shape a wrong answer can
+take.
+
+Two guards, doing different jobs:
+
+1. **A similarity floor** of `0.85`, which separates paraphrases from questions about a different
+   *rule*. It is set above the highest measured near miss (0.775) rather than in the middle of the
+   overlap, so it buys precision by giving up hit rate. A paraphrase that misses costs one model
+   round trip; a near miss that hits costs a wrong answer.
+2. **A discriminator guard**, which separates questions about a different *subject*. Tokens that
+   name a specific thing — anything carrying a digit (`PT-1001`, `WH-EU-01`, `30`, `15%`) and any
+   proper noun mid-sentence (`EMEA`, `Rotterdam`) — must match exactly between the two questions.
+   See [`QuestionDiscriminators`](src/OperationsCopilot.Domain/Planning/QuestionDiscriminators.cs).
+
+`PlanCacheSeparationTests` asserts both, including that at least one confusable pair still clears
+the floor — so deleting the guard as redundant fails the suite instead of quietly breaking answers.
+
+### What is deliberately not cached
+
+- **Follow-up turns.** "And in Rotterdam?" is not a question on its own. Its embedding identifies
+  nothing, and a plan stored under it would be replayed for any conversation that happened to say
+  the same three words. Only the first turn of a conversation reads or writes the cache.
+- **Plans carrying an explicit date.** The model resolves "last month" into fixed `yyyy-MM-dd`
+  bounds using the date it was told. Those bounds are right on the day they were chosen and wrong
+  afterwards, so such a plan is offered only while the model's "today" is unchanged. Relative
+  windows (`lastDays: 30`) carry no anchor and stay reusable.
+- **Turns that failed or were cut short.** A turn where a tool threw, or that hit
+  `Agent:MaxToolCallsPerTurn`, produced a truncated plan. Caching it would make the truncation
+  permanent.
+- **Turns that called no tool at all.** There is nothing to replay.
+
+### Where it lives
+
+A second pgvector table, `semantic_plan_cache`, with its own HNSW index over the question
+embedding and the plan itself stored as `jsonb`. No Redis: the database is already here, already
+has the extension, and already holds vectors written by the same embedding model. `VectorSchema`
+reconciles both vector columns with the configured model on startup, so switching embedding
+providers clears the cache along with the knowledge base — vectors from two models are not
+comparable.
+
+Every response reports what happened, next to the tool calls and the citations:
+
+```json
+"planCache": {
+  "hit": true,
+  "similarity": 0.9384,
+  "matchedQuestion": "How is the reorder threshold calculated?",
+  "planCapturedAt": "2026-09-07T15:16:12.803414+00:00",
+  "timesReused": 1,
+  "stored": false,
+  "note": null
+}
+```
+
+Measured locally against qwen2.5:14b, over three alternated pairs of the same two questions with
+the cache truncated before each planned turn:
+
+| | Latency (median) | Total tokens |
+|---|---|---|
+| Model plans the turn | 46,655 ms | 2,612 |
+| Plan replayed from cache | 31,955 ms | 1,841 |
+
+Token counts were identical on every run; local latency is noisy enough to want the median of
+three. Hosted models will differ in absolute terms — what does not differ is what was removed: one
+round trip and the tool catalogue that goes with it.
+
+Turn it off with `SemanticCache:Enabled=false`; every turn then plans from the model, as it did
+before the cache existed.
 
 ---
 
@@ -428,11 +563,11 @@ dotnet test
 ```
 
 The evaluation suite starts a real PostgreSQL with pgvector through Testcontainers, so Docker must
-be running. No Azure subscription is needed; the four live-model tests skip themselves.
+be running. No Azure subscription is needed; the seven live-model tests skip themselves.
 
 ```
-Passed!  - Failed: 0, Passed: 44, Skipped: 0, Total: 44   OperationsCopilot.UnitTests
-Passed!  - Failed: 0, Passed: 51, Skipped: 4, Total: 55   OperationsCopilot.EvaluationTests
+Passed!  - Failed: 0, Passed: 69, Skipped: 0, Total: 69   OperationsCopilot.UnitTests
+Passed!  - Failed: 0, Passed: 70, Skipped: 7, Total: 77   OperationsCopilot.EvaluationTests
 ```
 
 The live-model tier runs automatically when a provider is available — Ollama counts, so on a
@@ -483,6 +618,11 @@ Bound from `appsettings.json`, environment variables (`Section__Key`), and user 
 | `Rag:MaxChunkCharacters` | `900` | Chunk size target |
 | `Rag:ChunkOverlapCharacters` | `150` | Overlap between chunks |
 | `Rag:IndexOnStartup` | `true` | Idempotent; skips unchanged chunks |
+| `SemanticCache:Enabled` | `true` | Plan reuse. `false` ⇒ every turn plans from the model |
+| `SemanticCache:MinimumSimilarity` | `0.85` | Cosine floor for reusing a plan — **see below** |
+| `SemanticCache:Candidates` | `5` | Nearest stored questions examined per lookup |
+| `SemanticCache:TimeToLiveMinutes` | `1440` | How long a plan stays reusable |
+| `SemanticCache:MaxEntries` | `500` | Least-reused plans evicted past this |
 | `Agent:Temperature` | `0.1` | Low: this agent reports figures |
 | `Agent:MaxOutputTokens` | `1200` | |
 | `Agent:MaxToolCallsPerTurn` | `8` | Enforced by the tracking filter |
@@ -496,6 +636,15 @@ evaluation query set, relevant passages score from about **0.22** upward while o
 peak around **0.11**, so **0.15** separates them with margin on both sides. It is specific to one
 embedding model — re-measure with `ScoreDistributionTests` after switching provider or model,
 because the scale of cosine scores differs between them.
+
+**About `SemanticCache:MinimumSimilarity`.** Also measured, and the measurement is less
+comfortable: the paraphrase band (**0.54 – 0.94**) overlaps the near-miss band
+(**0.42 – 0.78**), so there is no floor that admits every paraphrase and rejects every near miss.
+`0.85` sits above the highest measured near miss and accepts a lower hit rate in exchange — a
+paraphrase that misses costs one model round trip, while a near miss that hits costs a wrong
+answer. The floor is not the only guard and cannot be; see
+[the semantic plan cache](#the-semantic-plan-cache). Re-measure with `PlanCacheSeparationTests`
+after changing the embedding model.
 
 ---
 
@@ -544,8 +693,8 @@ OperationsCopilot/
 │
 ├── tests/
 │   ├── OperationsCopilot.TestSupport/       Testcontainers fixture, scripted chat model
-│   ├── OperationsCopilot.UnitTests/         44 tests, no I/O
-│   └── OperationsCopilot.EvaluationTests/   55 tests, real PostgreSQL
+│   ├── OperationsCopilot.UnitTests/         69 tests, no I/O
+│   └── OperationsCopilot.EvaluationTests/   77 tests, real PostgreSQL
 │
 ├── docs/knowledge-base/                     the five policy documents
 ├── .github/workflows/ci.yml
@@ -581,6 +730,20 @@ quirks to discover — this way, if function calling works on one provider it wo
 known from configuration, and EF migrations are static. `VectorSchema` reconciles the two on
 startup and is a no-op unless the configured model changed. It is the one place where the schema
 is deliberately not owned by migrations, and the comment there says why.
+
+**The cache stores the plan, not the answer.** Caching the answer is the obvious move and the
+wrong one here: half the questions are about live stock and sales, so every entry would need an
+invalidation story and a TTL short enough to be nearly worthless. Caching which tools to call has
+no such problem — the tools run again either way — and it happens to remove the more expensive
+half of the turn, since choosing the tools is what the model is really being paid for.
+
+**Similarity was not enough, and that was a measurement rather than a hunch.** The first design was
+an embedding lookup with a threshold. Measuring it showed that questions differing only in their
+subject — `PT-1001` against `PT-1006`, 30 days against 90 — score 0.86 to 0.91, squarely inside the
+band where genuine paraphrases live. No threshold separates those, so `QuestionDiscriminators`
+does, by requiring the numbers, codes and proper nouns in two questions to match before their plans
+may be shared. `PlanCacheSeparationTests` asserts that at least one confusable pair still clears
+the floor, which is what stops the guard from being deleted later as redundant.
 
 **The tool-call budget is enforced, not advertised.** `Agent:MaxToolCallsPerTurn` is applied by the
 tracking filter, which short-circuits further calls with a message telling the model to answer from
@@ -627,6 +790,15 @@ This is a demonstration project. Where it would differ from something you could 
   than assuming the numbers here transfer.
 - **Retrieval is single-stage.** No reranking, no hybrid keyword+vector search, no query rewriting.
   All three are worth adding for a larger corpus; at 29 chunks they would be ceremony.
+- **The plan cache's guard is heuristic where it is not numeric.** Digits and proper nouns are
+  caught reliably; a subject distinguished by neither is left to the similarity floor alone. Two
+  questions about different unnamed things, worded almost identically, could still share a plan.
+  Widening the guard is cheap — a false discriminator only costs a cache miss — and worth doing
+  against a real question log rather than against a guessed one.
+- **The plan cache is per-question, not per-user.** Plans are shared across callers, which is safe
+  only because every tool here reads the same company-wide data. Add row-level permissions and the
+  cache key has to grow to include whatever the permissions depend on, or one caller's plan will
+  fetch another caller's rows.
 
 ---
 

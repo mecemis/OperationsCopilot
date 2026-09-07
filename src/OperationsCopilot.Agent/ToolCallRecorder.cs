@@ -1,6 +1,7 @@
 using OperationsCopilot.Domain.Abstractions;
 using OperationsCopilot.Domain.Chat;
 using OperationsCopilot.Domain.Knowledge;
+using OperationsCopilot.Domain.Planning;
 
 namespace OperationsCopilot.Agent;
 
@@ -11,6 +12,7 @@ namespace OperationsCopilot.Agent;
 public sealed class ToolCallRecorder : IToolCallRecorder
 {
     private readonly List<ToolInvocation> _toolCalls = [];
+    private readonly List<PlannedToolCall> _plannedCalls = [];
     private readonly List<KnowledgeSearchResult> _retrieved = [];
     private readonly HashSet<Guid> _seenChunks = [];
     private readonly Lock _gate = new();
@@ -22,6 +24,17 @@ public sealed class ToolCallRecorder : IToolCallRecorder
             lock (_gate)
             {
                 return [.. _toolCalls];
+            }
+        }
+    }
+
+    public IReadOnlyList<PlannedToolCall> PlannedCalls
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return [.. _plannedCalls];
             }
         }
     }
@@ -42,6 +55,14 @@ public sealed class ToolCallRecorder : IToolCallRecorder
         lock (_gate)
         {
             _toolCalls.Add(invocation);
+        }
+    }
+
+    public void RecordPlannedCall(PlannedToolCall call)
+    {
+        lock (_gate)
+        {
+            _plannedCalls.Add(call);
         }
     }
 

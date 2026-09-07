@@ -8,6 +8,7 @@ using OperationsCopilot.Infrastructure.Conversations;
 using OperationsCopilot.Infrastructure.Embeddings;
 using OperationsCopilot.Infrastructure.Knowledge;
 using OperationsCopilot.Infrastructure.Options;
+using OperationsCopilot.Infrastructure.Planning;
 using OperationsCopilot.Infrastructure.Persistence;
 using OperationsCopilot.Infrastructure.Seeding;
 
@@ -42,6 +43,11 @@ public static class InfrastructureServiceCollectionExtensions
             .ValidateDataAnnotations()
             .ValidateOnStart();
 
+        services.AddOptions<SemanticCacheOptions>()
+            .Bind(configuration.GetSection(SemanticCacheOptions.SectionName))
+            .ValidateDataAnnotations()
+            .ValidateOnStart();
+
         var connectionString = configuration.GetConnectionString(ConnectionStringName)
             ?? throw new InvalidOperationException(
                 $"Connection string '{ConnectionStringName}' is not configured. See README.md for setup.");
@@ -62,6 +68,7 @@ public static class InfrastructureServiceCollectionExtensions
 
         services.AddScoped<IOperationsRepository, OperationsRepository>();
         services.AddScoped<IKnowledgeBaseSearch, PgVectorKnowledgeBaseSearch>();
+        services.AddScoped<ISemanticPlanCache, PgVectorSemanticPlanCache>();
         services.AddSingleton<IKnowledgeDocumentSource, EmbeddedKnowledgeDocumentSource>();
         services.AddSingleton<IConversationStore, InMemoryConversationStore>();
         services.AddScoped<KnowledgeBaseIndexer>();

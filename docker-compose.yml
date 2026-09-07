@@ -49,6 +49,12 @@ services:
       Ollama__EmbeddingModel: "${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}"
       Ollama__EmbeddingDimensions: "${OLLAMA_EMBEDDING_DIMENSIONS:-768}"
 
+      # Plan cache. Off by default here would hide the feature; the threshold is the one
+      # setting worth tuning per embedding model.
+      SemanticCache__Enabled: "${SEMANTIC_CACHE_ENABLED:-true}"
+      SemanticCache__MinimumSimilarity: "${SEMANTIC_CACHE_MINIMUM_SIMILARITY:-0.85}"
+      SemanticCache__TimeToLiveMinutes: "${SEMANTIC_CACHE_TTL_MINUTES:-1440}"
+
       AzureOpenAI__Endpoint: "${AZURE_OPENAI_ENDPOINT:-}"
       AzureOpenAI__ApiKey: "${AZURE_OPENAI_API_KEY:-}"
       AzureOpenAI__ChatDeployment: "${AZURE_OPENAI_CHAT_DEPLOYMENT:-gpt-4o-mini}"
