@@ -147,6 +147,81 @@ curl -s -X POST http://localhost:5080/api/chat -H 'Content-Type: application/jso
 Pass back the `conversationId` and the agent gets the earlier turns, so "the discontinued one"
 resolves. History is capped at 12 turns with a one-hour sliding expiry.
 
+## 6. The same question again — the plan is reused
+
+Asked earlier in the day, in a different conversation: *"How is the reorder threshold
+calculated?"*. Now someone words it differently.
+
+```bash
+curl -s -X POST http://localhost:5080/api/chat -H 'Content-Type: application/json' \
+  -d '{"message":"How do we work out the reorder threshold?"}'
+```
+
+```jsonc
+{
+  "answer": "The reorder threshold for each product is calculated using the formula: (average daily units sold over the trailing 90 days x supplier lead time in days) + safety stock [1]. …",
+  "conversationId": "01a07c71b49a7e6680fb3b6d79669b30",
+  "citations": [ /* … four passages from inventory-policy.md, as in example 2 … */ ],
+  "toolCalls": [
+    {
+      "pluginName": "KnowledgeBase",
+      "functionName": "SearchKnowledgeBase",
+      "arguments": { "query": "How is the reorder threshold calculated?" },
+      "durationMs": 405,
+      "succeeded": true,
+      "error": null,
+      "name": "KnowledgeBase.SearchKnowledgeBase"
+    }
+  ],
+  "latencyMs": 14675,
+  "usage": { "promptTokens": 1747, "completionTokens": 99, "totalTokens": 1846 },
+  "planCache": {
+    "hit": true,
+    "similarity": 0.9384,
+    "matchedQuestion": "How is the reorder threshold calculated?",
+    "planCapturedAt": "2026-09-07T15:16:12.803414+00:00",
+    "timesReused": 1,
+    "stored": false,
+    "note": null
+  }
+}
+```
+
+Three things to read here.
+
+`toolCalls` is populated even though the model was offered no tools on this turn — the search ran
+from the stored plan, which is why the citations are real and freshly retrieved rather than
+remembered. The `query` argument is the wording the *earlier* question produced, replayed verbatim.
+
+`similarity` is `0.9384`, the same figure `PlanCacheSeparationTests` measures for this pair
+against `nomic-embed-text`, and `timesReused: 1` says one earlier turn had already replayed this
+plan.
+
+The turn that generated the plan reported the other side of it:
+
+```jsonc
+"planCache": { "hit": false, "similarity": null, "stored": true, "note": null }
+```
+
+**Measured, locally, against qwen2.5:14b** — three alternated pairs of the same two questions,
+cache truncated before each planned turn:
+
+| | Latency (median) | Total tokens |
+|---|---|---|
+| Model plans the turn | 46,655 ms | 2,612 |
+| Plan replayed from cache | 31,955 ms | 1,841 |
+
+Tokens were identical on every run; latency on a local model is noisy, hence the median of three.
+The saving is one model round trip plus the tool catalogue that would have been sent with it.
+
+A question that merely *looks* like a cached one does not qualify. `Tell me about PT-1006.` scores
+0.87 against a stored plan for `Tell me about PT-1001.` — inside the paraphrase band — and is
+rejected anyway, because the two questions name different products:
+
+```jsonc
+"planCache": { "hit": false, "stored": true, "note": null }
+```
+
 ## More questions to try
 
 ```text

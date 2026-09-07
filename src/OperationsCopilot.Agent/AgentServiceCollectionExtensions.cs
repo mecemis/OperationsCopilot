@@ -7,6 +7,7 @@ using Microsoft.SemanticKernel.Connectors.AzureOpenAI;
 using Microsoft.SemanticKernel.Connectors.OpenAI;
 using OperationsCopilot.Agent.Filters;
 using OperationsCopilot.Agent.Options;
+using OperationsCopilot.Agent.Planning;
 using OperationsCopilot.Agent.Plugins;
 using OperationsCopilot.Domain.Abstractions;
 using OperationsCopilot.Infrastructure;
@@ -91,6 +92,7 @@ public static class AgentServiceCollectionExtensions
         services.AddScoped<ToolCallTrackingFilter>();
         services.AddScoped<OperationsPlugin>();
         services.AddScoped<KnowledgeBasePlugin>();
+        services.AddScoped<PlanReplayer>();
         services.AddScoped(BuildKernel);
         services.AddScoped<ICopilotAgent, CopilotAgent>();
 
